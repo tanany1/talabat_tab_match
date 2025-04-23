@@ -35,3 +35,17 @@ flutter:
   # To add assets to your application, add an assets section, like this:
   assets:
     - assets/scenes/
+    - assets/items/study/
+    - assets/items/kitchen/
+    - assets/items/game/
+    - assets/items/cozy/
+    - assets/items/celebration/
+    - assets/items/beach/
+    - assets/icons/study/
+    - assets/icons/kitchen/
+    - assets/icons/game/
+    - assets/icons/cozy/
+    - assets/icons/celebration/
+    - assets/icons/beach/
+    - assets/scenes_icons/
+    - assets/
