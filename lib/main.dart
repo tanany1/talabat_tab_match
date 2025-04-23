@@ -1,17 +1,43 @@
+import 'dart:async';
+
+import 'package:audioplayers/audioplayers.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:convert';
 
-void main(List<String> args) {
+import 'package:window_manager/window_manager.dart';
+
+void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersive);
 
   if (args.isNotEmpty) {
+    // This is the scene window - just run it normally without window_manager
     final windowId = int.tryParse(args[0]);
     runApp(SceneWindow(windowId: windowId ?? 0));
   } else {
+    // Initialize window_manager only for the main window
+    await windowManager.ensureInitialized();
+
+    // Configure window_manager for main window
+    await windowManager.waitUntilReadyToShow(null, () async {
+      await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+      await windowManager.setFullScreen(true);
+      await windowManager.show();
+    });
+
+    // Add listener for maximize button
+    windowManager.addListener(MyWindowListener());
+
     runApp(const MainApp());
+  }
+}
+
+class MyWindowListener extends WindowListener {
+  @override
+  void onWindowMaximize() async {
+    await windowManager.setFullScreen(true);
   }
 }
 
@@ -104,6 +130,13 @@ class _MainGameScreenState extends State<MainGameScreen> {
   Map<String, bool> blinkingEmojis = {};
   bool isSceneWindowOpen = false; // Track if scene window is open
   int? sceneWindowId; // Store the window ID
+  Timer? gameTimer;
+  int secondsElapsed = 0;
+  Map<String, bool> showXMarks = {};
+  final AudioCache _audioCache = AudioCache();
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  final formatTime = (int seconds) => '${(seconds ~/ 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
+
 
   List<Map<String, dynamic>> availableScenes = [
     {'id': 'kitchen', 'name': 'Kitchen Chaos', 'icon': 'assets/scenes_icons/Kitchenicon.png'},
@@ -328,26 +361,60 @@ class _MainGameScreenState extends State<MainGameScreen> {
       }
       return;
     });
+    _audioPlayer.setReleaseMode(ReleaseMode.release);
   }
 
   @override
   void dispose() {
     super.dispose();
+    _audioPlayer.dispose();
+    gameTimer?.cancel();
+    super.dispose();
   }
-
+  void startTimer() {
+    gameTimer?.cancel();
+    setState(() => secondsElapsed = 0);
+    gameTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      setState(() => secondsElapsed++);
+    });
+  }
+  void _playSound(String soundPath) async {
+    try {
+      await _audioPlayer.stop();
+      await _audioPlayer.play(AssetSource(soundPath));
+      print("Successfully playing: $soundPath");
+    } catch (e) {
+      print("Error playing sound: $e");
+    }
+  }
   Future<void> openSceneWindow() async {
     if (isSceneWindowOpen) return;
+
+    // Create window with specific parameters
     final window = await DesktopMultiWindow.createWindow(
-      jsonEncode({}),
+      jsonEncode({
+        'fullscreen': true,
+        'frameless': true,
+      }),
     );
+
+    // Configure the window
     window
-      ..setFrame(const Offset(700, 300) & const Size(800, 800))
+      ..setFrame(const Offset(0, 0) &
+      Size(MediaQuery.of(context).size.width, MediaQuery.of(context).size.height))
       ..setTitle('Scene Viewer')
+    // Make it frameless (no title bar)
+      ..setFrame(const Offset(0, 0) & const Size(1920, 1080)) // Use a large size
+    // Set the window to fullscreen mode
+      ..center()
       ..show();
+
     setState(() {
       isSceneWindowOpen = true;
       sceneWindowId = window.windowId;
     });
+
+    // Send any necessary scene data
     if (currentScene.isNotEmpty) {
       DesktopMultiWindow.invokeMethod(
           window.windowId, 'update_scene', currentScene);
@@ -375,7 +442,7 @@ class _MainGameScreenState extends State<MainGameScreen> {
         DesktopMultiWindow.invokeMethod(
             sceneWindowId!, 'show_congratulations', false);
       }
-
+      startTimer();
       // Shuffle emojis when selecting a new scene
       _shuffleEmojis();
     });
@@ -401,11 +468,13 @@ class _MainGameScreenState extends State<MainGameScreen> {
     final correctIds = sceneEmojis[currentScene]!.map((e) => e['id']).toList();
 
     if (correctIds.contains(emojiId)) {
-      setState(() {
-        if (markedEmojis.contains(emojiId)) {
-          markedEmojis.remove(emojiId);
-        } else {
+      // Check if already selected - should not deselect
+      if (!markedEmojis.contains(emojiId)) {
+        setState(() {
           markedEmojis.add(emojiId);
+
+          // Play correct sound
+          _playSound('sounds/Correct Answer sound effect(MP3_160K).mp3');
 
           // Update scene window with selected emoji
           if (isSceneWindowOpen && sceneWindowId != null) {
@@ -418,38 +487,50 @@ class _MainGameScreenState extends State<MainGameScreen> {
               markedEmojis.containsAll(correctIds)) {
             showCongratulations = true;
 
+            // Stop the timer when game is completed
+            gameTimer?.cancel();
+
+            // Play congratulations sound
+            _playSound('sounds/YEHEY CLAP SOUND EFFECT Awarding(MP3_160K).mp3');
+
             // Notify scene window about congratulations
             if (isSceneWindowOpen && sceneWindowId != null) {
               DesktopMultiWindow.invokeMethod(
                   sceneWindowId!, 'show_congratulations', true);
             }
           }
-        }
-      });
+        });
+      }
     } else {
-      // Only blink the wrong emoji that was tapped
-      _blinkIncorrectEmoji(emojiId);
+      // Show X mark for incorrect emoji
+      _showXMarkForIncorrectEmoji(emojiId);
     }
   }
 
-  void _blinkIncorrectEmoji(String emojiId) {
-    // Make only this specific emoji blink
-    setState(() => blinkingEmojis[emojiId] = true);
+  void _showXMarkForIncorrectEmoji(String emojiId) {
+    // Show X mark
+    setState(() => showXMarks[emojiId] = true);
 
+    // First blink
     Future.delayed(const Duration(milliseconds: 300), () {
       if (!mounted) return;
-      setState(() => blinkingEmojis[emojiId] = false);
+      setState(() => showXMarks[emojiId] = false);
 
+      // Second blink
       Future.delayed(const Duration(milliseconds: 300), () {
         if (!mounted) return;
-        setState(() => blinkingEmojis[emojiId] = true);
+        setState(() => showXMarks[emojiId] = true);
 
+        // End animation
         Future.delayed(const Duration(milliseconds: 300), () {
           if (!mounted) return;
-          setState(() => blinkingEmojis[emojiId] = false);
+          setState(() => showXMarks[emojiId] = false);
         });
       });
     });
+
+    // Play wrong sound
+    _playSound('sounds/Wrong Buzzer - Sound Effect(MP3_160K) (mp3cut.net) (1).mp3');
   }
 
   void resetGame() {
@@ -459,11 +540,25 @@ class _MainGameScreenState extends State<MainGameScreen> {
       showCongratulations = false;
       blinkingEmojis.clear();
       shuffledEmojis.clear();
+      gameTimer?.cancel();
+      secondsElapsed = 0;
 
       // Update the existing scene window instead of closing it
       if (isSceneWindowOpen && sceneWindowId != null) {
         DesktopMultiWindow.invokeMethod(sceneWindowId!, 'reset_window');
       }
+      if (showCongratulations) {
+        Future.delayed(const Duration(seconds: 10), () {
+          if (mounted) {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (context) => const WelcomeScreen(),
+              ),
+            );
+          }
+        });
+      }
+
     });
   }
 
@@ -482,7 +577,27 @@ class _MainGameScreenState extends State<MainGameScreen> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: const Color(0xFFF2E8D5),
-
+        leading: IconButton(
+          icon: const Icon(Icons.refresh, color: Color(0xFF3D1101)),
+          onPressed: currentScene.isEmpty ? null : resetGame,
+        ),
+        title: currentScene.isEmpty
+            ? null
+            : Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFF5E0E),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            formatTime(secondsElapsed),
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        centerTitle: true,
         actions: [
           IconButton(
             icon: const Icon(Icons.visibility),
@@ -565,47 +680,45 @@ class _MainGameScreenState extends State<MainGameScreen> {
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: availableScenes.map((scene) {
                             final isSelected = currentScene == scene['id'];
+                            // Only apply reduced opacity when a scene has been selected and this isn't the selected one
+                            final showReducedOpacity = currentScene.isNotEmpty && !isSelected;
                             return Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 8.0),
                               child: GestureDetector(
                                 onTap: () => selectScene(scene['id']),
-                                child: Container(
-                                  width: isSmallScreen ? 150 : 220, // Increased width
-                                  height: isSmallScreen ? 150 : 220, // Increased height
-                                  decoration: BoxDecoration(
-                                    color: isSelected
-                                        ? const Color(0xFFFF5E0E)
-                                        : const Color(0xFF3D1101),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Padding(
-                                        padding: const EdgeInsets.all(8.0),
-                                        child: Image.asset(
+                                child: Opacity(
+                                  opacity: showReducedOpacity ? 0.4 : 1.0, // Full opacity unless this is not selected and another scene is
+                                  child: Container(
+                                    width: isSmallScreen ? 150 : 220,
+                                    height: isSmallScreen ? 150 : 220,
+                                    decoration: BoxDecoration(
+                                      color: isSelected
+                                          ? const Color(0xFFFF5E0E)
+                                          : const Color(0xFF3D1101),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        // Display the scene icon image
+                                        Image.asset(
                                           scene['icon'],
-                                          height: isSmallScreen ? 110 : 130, // Larger images
-                                          width: isSmallScreen ? 110 : 130,
+                                          width: isSmallScreen ? 100 : 140,
+                                          height: isSmallScreen ? 100 : 140,
                                           fit: BoxFit.contain,
                                         ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Padding(
-                                        padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                                        child: Text(
+                                        const SizedBox(height: 10),
+                                        // Display scene name
+                                        Text(
                                           scene['name'],
                                           style: TextStyle(
                                             color: Colors.white,
+                                            fontSize: isSmallScreen ? 25 : 24,
                                             fontWeight: FontWeight.bold,
-                                            fontSize: isSmallScreen ? 12 : 14, // Increased font
                                           ),
-                                          textAlign: TextAlign.center,
-                                          overflow: TextOverflow.ellipsis,
-                                          maxLines: 2,
                                         ),
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
@@ -621,42 +734,59 @@ class _MainGameScreenState extends State<MainGameScreen> {
             const Divider(height: 40),
             const SizedBox(height: 20,),
             Expanded(
-              child: GridView.builder(
+              child: currentScene.isEmpty
+                  ? Center(
+                child: Image.asset(
+                  'assets/Talabat Logo.png', // Add this image to your assets
+                  fit: BoxFit.contain,
+                ),
+              ): GridView.builder(
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: gridCrossAxisCount,
                   crossAxisSpacing: 8,
                   mainAxisSpacing: 8,
                 ),
                 itemCount: shuffledEmojis.length,
-                itemBuilder: (context, index) {
-                  final emoji = shuffledEmojis[index];
-                  final isMarked = markedEmojis.contains(emoji['id']);
-                  final isBlinking = blinkingEmojis[emoji['id']] == true;
-                  return GestureDetector(
-                    onTap: () => toggleEmoji(emoji['id']),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: isBlinking
-                            ? Colors.red
-                            : isMarked
-                            ? const Color(0xFFFF5E0E)
-                            : const Color(0xFF3D1101),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Image.asset(
-                            emoji['icon'],
-                            height: isSmallScreen ? 100 : 100,
-                            width: isSmallScreen ? 100 : 100,
-                            fit: BoxFit.contain,
-                          ),
+                  itemBuilder: (context, index) {
+                    final emoji = shuffledEmojis[index];
+                    final isMarked = markedEmojis.contains(emoji['id']);
+                    final showXMark = showXMarks[emoji['id']] == true;
+
+                    return GestureDetector(
+                      onTap: () => toggleEmoji(emoji['id']),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: isMarked
+                              ? const Color(0xFFFF5E0E)
+                              : const Color(0xFF3D1101),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Image.asset(
+                                  emoji['icon'],
+                                  height: isSmallScreen ? 100 : 100,
+                                  width: isSmallScreen ? 100 : 100,
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
+                            ),
+                            if (showXMark)
+                              Center(
+                                child: Image.asset(
+                                  'assets/wrong-button.png', // Add this to your assets
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
+                          ],
                         ),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  }
               ),
             ),
             if (showCongratulations)
@@ -701,6 +831,7 @@ class _SceneWindowState extends State<SceneWindow> {
   String currentScene = '';
   bool showCongratulations = false;
   List<String> markedEmojis = [];
+  Map<String, double> itemOpacities = {};
 
   // Map scene IDs to appropriate image assets
   Map<String, String> sceneImages = {
@@ -777,6 +908,10 @@ class _SceneWindowState extends State<SceneWindow> {
   @override
   void initState() {
     super.initState();
+
+    // Make sure we're in fullscreen mode using SystemChrome
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+
     // Set up channel to receive scene updates
     DesktopMultiWindow.setMethodHandler((call, fromWindowId) async {
       if (call.method == 'update_scene') {
@@ -798,21 +933,58 @@ class _SceneWindowState extends State<SceneWindow> {
         });
       } else if (call.method == 'update_marked_emojis') {
         final List<dynamic> jsonEmojis = jsonDecode(call.arguments as String);
+        final List<String> newEmojis = jsonEmojis.cast<String>();
+
+        // Find new emojis that weren't previously marked
+        final newlyAddedEmojis = newEmojis.where((emoji) => !markedEmojis.contains(emoji)).toList();
+
         setState(() {
-          markedEmojis = jsonEmojis.cast<String>();
+          markedEmojis = newEmojis;
+
+          // Initialize opacity for new items
+          for (final emoji in newlyAddedEmojis) {
+            itemOpacities[emoji] = 0.0;
+
+            // Start fade animation
+            _animateItemOpacity(emoji);
+          }
         });
       }
-      return;
+      return null;
     });
   }
 
-  // Send notification when window is closed
+// Move the dispose method outside of initState
   @override
   void dispose() {
     DesktopMultiWindow.invokeMethod(0, 'window_closed', widget.windowId);
     super.dispose();
   }
 
+// Define _animateItemOpacity as a class method
+  void _animateItemOpacity(String emojiId) {
+    // Animation runs for 1 second
+    const animationDuration = Duration(milliseconds: 1000);
+    const fps = 60.0;
+    const totalSteps = fps;
+    final stepDuration = Duration(milliseconds: (1000 / fps).round());
+
+    int step = 0;
+    Timer.periodic(stepDuration, (timer) {
+      if (step >= totalSteps || !mounted) {
+        timer.cancel();
+        if (mounted) {
+          setState(() => itemOpacities[emojiId] = 1.0);
+        }
+        return;
+      }
+
+      step++;
+      if (mounted) {
+        setState(() => itemOpacities[emojiId] = step / totalSteps);
+      }
+    });
+  }
   @override
   Widget build(BuildContext context) {
     // Get screen size for responsive design, especially for portrait mode
@@ -830,10 +1002,10 @@ class _SceneWindowState extends State<SceneWindow> {
           width: double.infinity,
           height: double.infinity,
           child: currentScene.isEmpty
-              ? const Center(
-            child: Text(
-              'Please select a scene in the main window',
-              style: TextStyle(fontSize: 18),
+              ? Center(
+            child: Image.asset(
+              'assets/Select Scene.jpg',
+              fit: BoxFit.contain,
             ),
           )
               : Center(
