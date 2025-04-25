@@ -390,6 +390,9 @@ class _MainGameScreenState extends State<MainGameScreen> {
   Future<void> openSceneWindow() async {
     if (isSceneWindowOpen) return;
 
+    // Get the exact screen dimensions where the app is running
+    final screenSize = MediaQuery.of(context).size;
+
     // Create window with specific parameters
     final window = await DesktopMultiWindow.createWindow(
       jsonEncode({
@@ -398,15 +401,12 @@ class _MainGameScreenState extends State<MainGameScreen> {
       }),
     );
 
-    // Configure the window
+    // Configure the window - use exactly the screen dimensions
     window
-      ..setFrame(const Offset(0, 0) &
-      Size(MediaQuery.of(context).size.width, MediaQuery.of(context).size.height))
+      ..setFrame(const Offset(0, 0) & screenSize)
       ..setTitle('Scene Viewer')
     // Make it frameless (no title bar)
-      ..setFrame(const Offset(0, 0) & const Size(1920, 1080)) // Use a large size
-    // Set the window to fullscreen mode
-      ..center()
+    //   ..setFullScreen(true) // This ensures it takes the full available space
       ..show();
 
     setState(() {
@@ -997,24 +997,23 @@ class _SceneWindowState extends State<SceneWindow> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
-        body: Container(
-          color: const Color(0xFFF2E8D5),
-          width: double.infinity,
-          height: double.infinity,
-          child: currentScene.isEmpty
-              ? Center(
-            child: Image.asset(
-              'assets/Select Scene.jpg',
-              fit: BoxFit.contain,
-            ),
-          )
-              : Center(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return showCongratulations
-                    ? _buildCongratulationsCard(constraints)
-                    : _buildSceneWithItems(constraints, isPortrait);
-              },
+        body: Center(
+          child: SizedBox(
+            child: currentScene.isEmpty
+                ? Image.asset(
+                  'assets/Select Scene.jpg',
+                  fit: BoxFit.fill,
+                  width: 1700,
+                  height: 1200,
+                )
+                : Center(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return showCongratulations
+                      ? _buildCongratulationsCard(constraints)
+                      : _buildSceneWithItems(constraints, isPortrait);
+                },
+              ),
             ),
           ),
         ),
@@ -1023,16 +1022,18 @@ class _SceneWindowState extends State<SceneWindow> {
   }
   Widget _buildSceneWithItems(BoxConstraints constraints, bool isPortrait) {
     return Container(
-      width: double.infinity,
-      height: double.infinity,
-      padding: const EdgeInsets.all(8),
+      width: 1700,
+      height: 1200,
       child: Stack(
         alignment: Alignment.center,
+        fit: StackFit.expand,
         children: [
           // First, show the scene base image
-          Image.asset(
-            sceneImages[currentScene] ?? 'assets/images/placeholder.png',
-            fit: isPortrait ? BoxFit.fitWidth : BoxFit.contain,
+          Positioned.fill(
+            child: Image.asset(
+              sceneImages[currentScene] ?? 'assets/images/placeholder.png',
+              fit: BoxFit.fill, // Change to fill to ensure it stretches to fill the whole space
+            ),
           ),
 
           // Then, on top, show the marked items
@@ -1041,11 +1042,10 @@ class _SceneWindowState extends State<SceneWindow> {
               final itemPath = itemImages[currentScene]?[emojiId];
               if (itemPath == null) return const SizedBox.shrink();
 
-              return Padding(
-                padding: const EdgeInsets.all(12.0),
+              return Positioned.fill(  // Use Positioned.fill for the items too
                 child: Image.asset(
                   itemPath,
-                  fit: BoxFit.contain,
+                  fit: BoxFit.fill,
                 ),
               );
             }).toList(),
@@ -1055,12 +1055,15 @@ class _SceneWindowState extends State<SceneWindow> {
   }
 
   Widget _buildCongratulationsCard(BoxConstraints constraints) {
-    return Container(
-      width: double.infinity,
-      height: double.infinity,
-      child: Image.asset(
-        'assets/Celebrarion screen copy.png',
-        fit: BoxFit.contain,
+    return Center(
+      child: Container(
+        width: 1700,
+        height: 1200,
+        color: Colors.black,
+        child: Image.asset(
+          'assets/Celebrarion screen copy.png',
+          fit: BoxFit.fill,
+        ),
       ),
     );
   }
