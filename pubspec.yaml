@@ -17,7 +17,7 @@ dependencies:
   cupertino_icons: ^1.0.2
   window_manager: ^0.3.0
   desktop_multi_window: ^0.2.1
-  audioplayers: ^6.4.0
+  audioplayers: ^6.0.0
 
 dev_dependencies:
   flutter_test:
@@ -53,3 +53,4 @@ flutter:
     - assets/sounds/Correct Answer sound effect(MP3_160K).mp3
     - assets/sounds/Wrong Buzzer - Sound Effect(MP3_160K) (mp3cut.net) (1).mp3
     - assets/sounds/YEHEY CLAP SOUND EFFECT Awarding(MP3_160K).mp3
+    - assets/sounds/game_over.mp3
